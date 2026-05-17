@@ -2,11 +2,14 @@ import re
 import json
 import aiohttp
 import asyncio
+import logging
 from typing import Optional
 import discord
 from redbot.core import commands, Config
 from redbot.core.bot import Red
 from redbot.core.utils.chat_formatting import pagify, box
+
+log = logging.getLogger("red.vibe")
 
 class VibeCog(commands.Cog):
     """Generate playlists using AI and play them continuously."""
@@ -72,15 +75,19 @@ class VibeCog(commands.Cog):
         await ctx.send(f"📋 Found {len(songs)} songs. Adding to queue...")
 
         added = 0
+        play_cmd = self.bot.get_command("play")
+        if play_cmd is None:
+            await ctx.send("❌ Could not find the `play` command. Make sure Audio cog is loaded.")
+            return
+
         for song in songs:
             search_query = f"{song['title']} {song['artist']}"
             try:
-                # Use Audio cog's play command to enqueue each track
-                await ctx.invoke(audio.play, query=search_query)
+                await ctx.invoke(play_cmd, query=search_query)
                 added += 1
                 await asyncio.sleep(0.5)
             except Exception as e:
-                self.bot.logger.debug(f"Failed to enqueue '{search_query}': {e}")
+                log.debug(f"Failed to enqueue '{search_query}': {e}")
                 continue
 
         await ctx.send(f"✅ Added {added}/{len(songs)} songs to the queue. Now playing!")
