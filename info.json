@@ -1,0 +1,8 @@
+{
+    "author": ["Toreh"],
+    "name": "Vibe",
+    "short": "AI-powered music playlist generation",
+    "description": "Generate playlists using AI and play them continuously through the Audio cog.",
+    "install_msg": "Thanks for installing Vibe Cog!\nSet your LLM API key with [p]vibe set api_key <key>",
+    "tags": ["music", "ai", "llm", "playlist"]
+}
