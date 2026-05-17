@@ -57,15 +57,6 @@ class VibeCog(commands.Cog):
             await ctx.send("❌ You need to be in a voice channel!")
             return
 
-        channel = ctx.author.voice.channel
-
-        # Connect to voice channel using Audio cog
-        try:
-            await audio.command_connect(ctx, channel)
-        except Exception:
-            await ctx.send("❌ Failed to connect to voice channel.")
-            return
-
         await ctx.send(f"🎵 Generating playlist for vibe: **{query}**...")
 
         try:
@@ -84,18 +75,10 @@ class VibeCog(commands.Cog):
         for song in songs:
             search_query = f"{song['title']} {song['artist']}"
             try:
-                # Try internal API first (most efficient)
-                tracks = await audio._get_tracks(ctx, search_query)
-                if tracks:
-                    player = audio.get_player(ctx.guild)
-                    if player:
-                        await player.queue.put(tracks[0])
-                        added += 1
-                else:
-                    # Fallback to public play command
-                    await ctx.invoke(audio.play, query=search_query)
-                    added += 1
-                await asyncio.sleep(0.3)
+                # Use Audio cog's play command to enqueue each track
+                await ctx.invoke(audio.play, query=search_query)
+                added += 1
+                await asyncio.sleep(0.5)
             except Exception as e:
                 self.bot.logger.debug(f"Failed to enqueue '{search_query}': {e}")
                 continue
