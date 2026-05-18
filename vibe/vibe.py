@@ -2,6 +2,7 @@ import re
 import json
 import aiohttp
 import asyncio
+import socket
 import logging
 from typing import Optional
 import discord
@@ -31,7 +32,9 @@ class VibeCog(commands.Cog):
     @property
     def session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            # Force IPv4 to avoid IPv6 timeout issues
+            connector = aiohttp.TCPConnector(family=socket.AF_INET)
+            self._session = aiohttp.ClientSession(connector=connector)
         return self._session
 
     async def cog_unload(self):
