@@ -139,9 +139,11 @@ class VibeCog(commands.Cog):
         headers = {
             "Content-Type": "application/json",
             "x-api-key": api_key,
+            "User-Agent": "Red-DiscordBot-VibeCog/1.0",
         }
 
         log.info(f"Sending request to {url} with model {model}")
+        log.info(f"Headers: { {k: v[:10]+'...' if len(v) > 10 else v for k, v in headers.items()} }")
 
         def do_request():
             req = urllib.request.Request(url, data=body, headers=headers, method='POST')
