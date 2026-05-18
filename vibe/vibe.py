@@ -1,8 +1,8 @@
 import re
 import json
-import subprocess
+import aiohttp
 import asyncio
-import tempfile
+import socket
 import logging
 from typing import Optional
 import discord
@@ -135,58 +135,37 @@ class VibeCog(commands.Cog):
             "max_tokens": 2000,
         }
 
-        # Write body to temp file to avoid shell escaping issues
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-            json.dump(body, f)
-            tmp_file = f.name
-
         url = f"{base_url}/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        }
+
         log.info(f"Sending request to {url} with model {model}")
 
-        def do_curl():
-            try:
-                result = subprocess.run(
-                    ['curl', '-s', '--max-time', '30', '-X', 'POST', url,
-                     '-H', 'Content-Type: application/json',
-                     '-H', f'x-api-key: {api_key}',
-                     '-H', 'User-Agent: Mozilla/5.0',
-                     '-d', f'@{tmp_file}'],
-                    capture_output=True,
-                    text=True,
-                    timeout=35
-                )
-                return result
-            finally:
-                import os
-                try:
-                    os.unlink(tmp_file)
-                except:
-                    pass
+        # Force IPv4 to avoid DNS timeout issues
+        connector = aiohttp.TCPConnector(family=socket.AF_INET, ttl_dns_cache=300, use_dns_cache=True)
+        timeout = aiohttp.ClientTimeout(total=30)
 
         try:
-            result = await asyncio.to_thread(do_curl)
-        except subprocess.TimeoutExpired:
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                async with session.post(url, headers=headers, json=body) as resp:
+                    log.info(f"LLM response status: {resp.status}")
+                    if resp.status != 200:
+                        text = await resp.text()
+                        log.error(f"LLM API error {resp.status}: {text}")
+                        raise RuntimeError(f"LLM API error {resp.status}: {text[:500]}")
+
+                    data = await resp.json()
+                    log.info(f"LLM response received, choices: {len(data.get('choices', []))}")
+
+        except aiohttp.ClientConnectorError as e:
+            log.error(f"Connection failed: {e}")
+            raise RuntimeError(f"Connection failed: {e}")
+        except asyncio.TimeoutError:
+            log.error("LLM request timed out")
             raise RuntimeError("LLM request timed out")
-
-        log.info(f"curl exit code: {result.returncode}")
-        log.info(f"curl stdout length: {len(result.stdout)}")
-        if result.stderr:
-            log.info(f"curl stderr: {result.stderr[:500]}")
-
-        if result.returncode != 0:
-            raise RuntimeError(f"curl failed (code {result.returncode}): {result.stderr[:500]}")
-
-        if 'error' in result.stdout.lower() or result.returncode != 0:
-            log.error(f"LLM response error: {result.stdout[:500]}")
-            raise RuntimeError(f"LLM API error: {result.stdout[:500]}")
-
-        log.info(f"LLM response received, length: {len(result.stdout)} chars")
-
-        try:
-            data = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            log.error(f"Invalid JSON response: {result.stdout[:500]}")
-            raise RuntimeError(f"Invalid JSON from LLM: {result.stdout[:200]}")
 
         choice = data.get("choices", [{}])[0]
         content = choice.get("message", {}).get("content", "")
