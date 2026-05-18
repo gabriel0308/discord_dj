@@ -107,6 +107,8 @@ class VibeCog(commands.Cog):
         display = f"{value[:10]}..." if len(value) > 10 else value
         await ctx.send(f"✅ Set `{key}` to `{display}`")
 
+    FALLBACK_MODELS = ["qwen3.6-plus-free", "deepseek-v4-flash-free", "minimax-m2.5-free"]
+
     async def generate_playlist(self, vibe: str) -> list:
         api_key = await self.config.llm_api_key()
         base_url = await self.config.llm_base_url()
@@ -126,7 +128,6 @@ class VibeCog(commands.Cog):
         )
 
         body = {
-            "model": model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Create a playlist for this vibe: \"{vibe}\""},
@@ -139,48 +140,63 @@ class VibeCog(commands.Cog):
             "Content-Type": "application/json",
             "x-api-key": api_key,
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        }
-
-        log.info(f"Sending request to {url} with model {model}")
-
-        connector = aiohttp.TCPConnector(ssl=False, ttl_dns_cache=300)
-        timeout = aiohttp.ClientTimeout(total=30)
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "*/*",
             "Accept-Encoding": "gzip, deflate, br",
             "Accept-Language": "en-US,en;q=0.9",
         }
 
-        try:
-            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-                async with session.post(url, headers=headers, json=body) as resp:
-                    log.info(f"LLM response status: {resp.status}")
-                    if resp.status != 200:
-                        text = await resp.text()
-                        log.error(f"LLM API error {resp.status}: {text}")
-                        raise RuntimeError(f"LLM API error {resp.status}: {text[:500]}")
+        models_to_try = [model] + [m for m in self.FALLBACK_MODELS if m != model]
+        last_error = None
 
-                    data = await resp.json()
-                    log.info(f"LLM response received, choices: {len(data.get('choices', []))}")
+        for attempt_model in models_to_try:
+            body["model"] = attempt_model
+            log.info(f"Trying model: {attempt_model}")
 
-        except aiohttp.ClientConnectorError as e:
-            log.error(f"Connection failed: {e}")
-            raise RuntimeError(f"Connection failed: {e}")
-        except asyncio.TimeoutError:
-            log.error("LLM request timed out")
-            raise RuntimeError("LLM request timed out")
+            for attempt in range(3):
+                connector = aiohttp.TCPConnector(ssl=False, ttl_dns_cache=300)
+                timeout = aiohttp.ClientTimeout(total=30)
 
-        choice = data.get("choices", [{}])[0]
-        content = choice.get("message", {}).get("content", "")
+                try:
+                    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                        async with session.post(url, headers=headers, json=body) as resp:
+                            log.info(f"LLM response status: {resp.status} (attempt {attempt + 1})")
+                            if resp.status == 429:
+                                text = await resp.text()
+                                log.warning(f"Rate limited on {attempt_model}, attempt {attempt + 1}: {text}")
+                                if attempt < 2:
+                                    await asyncio.sleep(5 * (attempt + 1))
+                                    continue
+                                last_error = f"Rate limit exceeded on {attempt_model}"
+                                break
 
-        if not content:
-            raise RuntimeError("Empty response from LLM")
+                            if resp.status != 200:
+                                text = await resp.text()
+                                log.error(f"LLM API error {resp.status}: {text}")
+                                last_error = f"LLM API error {resp.status}: {text[:500]}"
+                                break
 
-        songs = self._parse_response(content)
-        return songs
+                            data = await resp.json()
+                            log.info(f"LLM response received, choices: {len(data.get('choices', []))}")
+                            choice = data.get("choices", [{}])[0]
+                            content = choice.get("message", {}).get("content", "")
+
+                            if not content:
+                                last_error = "Empty response from LLM"
+                                break
+
+                            return self._parse_response(content)
+
+                except aiohttp.ClientConnectorError as e:
+                    log.error(f"Connection failed: {e}")
+                    last_error = f"Connection failed: {e}"
+                except asyncio.TimeoutError:
+                    log.error("LLM request timed out")
+                    last_error = "LLM request timed out"
+
+                if attempt < 2:
+                    await asyncio.sleep(2)
+
+        raise RuntimeError(last_error or "All models failed")
 
     def _parse_response(self, content: str) -> list:
         json_str = content.strip()
