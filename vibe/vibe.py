@@ -1,8 +1,8 @@
 import re
 import json
-import urllib.request
-import urllib.error
+import subprocess
 import asyncio
+import tempfile
 import logging
 from typing import Optional
 import discord
@@ -126,47 +126,67 @@ class VibeCog(commands.Cog):
             "Do not include any explanation, markdown, or text outside the JSON."
         )
 
-        body = json.dumps({
+        body = {
             "model": model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Create a playlist for this vibe: \"{vibe}\""},
             ],
             "max_tokens": 2000,
-        }).encode('utf-8')
-
-        url = f"{base_url}/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "User-Agent": "Red-DiscordBot-VibeCog/1.0",
         }
 
+        # Write body to temp file to avoid shell escaping issues
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump(body, f)
+            tmp_file = f.name
+
+        url = f"{base_url}/chat/completions"
         log.info(f"Sending request to {url} with model {model}")
-        log.info(f"Headers: { {k: v[:10]+'...' if len(v) > 10 else v for k, v in headers.items()} }")
 
-        def do_request():
-            req = urllib.request.Request(url, data=body, headers=headers, method='POST')
-            with urllib.request.urlopen(req, timeout=30) as response:
-                return response.read().decode('utf-8')
+        def do_curl():
+            try:
+                result = subprocess.run(
+                    ['curl', '-s', '--max-time', '30', '-X', 'POST', url,
+                     '-H', 'Content-Type: application/json',
+                     '-H', f'x-api-key: {api_key}',
+                     '-H', 'User-Agent: Mozilla/5.0',
+                     '-d', f'@{tmp_file}'],
+                    capture_output=True,
+                    text=True,
+                    timeout=35
+                )
+                return result
+            finally:
+                import os
+                try:
+                    os.unlink(tmp_file)
+                except:
+                    pass
 
         try:
-            response_text = await asyncio.to_thread(do_request)
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode('utf-8', errors='replace')
-            log.error(f"LLM HTTP error {e.code}: {error_body}")
-            raise RuntimeError(f"LLM API error {e.code}: {error_body}")
-        except urllib.error.URLError as e:
-            log.error(f"LLM URL error: {e.reason}")
-            raise RuntimeError(f"LLM connection error: {e.reason}")
+            result = await asyncio.to_thread(do_curl)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("LLM request timed out")
 
-        log.info(f"LLM response received, length: {len(response_text)} chars")
+        log.info(f"curl exit code: {result.returncode}")
+        log.info(f"curl stdout length: {len(result.stdout)}")
+        if result.stderr:
+            log.info(f"curl stderr: {result.stderr[:500]}")
+
+        if result.returncode != 0:
+            raise RuntimeError(f"curl failed (code {result.returncode}): {result.stderr[:500]}")
+
+        if 'error' in result.stdout.lower() or result.returncode != 0:
+            log.error(f"LLM response error: {result.stdout[:500]}")
+            raise RuntimeError(f"LLM API error: {result.stdout[:500]}")
+
+        log.info(f"LLM response received, length: {len(result.stdout)} chars")
 
         try:
-            data = json.loads(response_text)
+            data = json.loads(result.stdout)
         except json.JSONDecodeError:
-            log.error(f"Invalid JSON response: {response_text[:500]}")
-            raise RuntimeError(f"Invalid JSON from LLM: {response_text[:200]}")
+            log.error(f"Invalid JSON response: {result.stdout[:500]}")
+            raise RuntimeError(f"Invalid JSON from LLM: {result.stdout[:200]}")
 
         choice = data.get("choices", [{}])[0]
         content = choice.get("message", {}).get("content", "")
