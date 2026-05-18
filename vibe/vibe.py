@@ -65,7 +65,9 @@ class VibeCog(commands.Cog):
         try:
             songs = await self.generate_playlist(query)
         except Exception as e:
-            await ctx.send(f"❌ Failed to generate playlist: {e}")
+            import traceback
+            tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+            await ctx.send(f"❌ Failed to generate playlist:\n```\n{tb[:1900]}\n```")
             return
 
         if not songs:
