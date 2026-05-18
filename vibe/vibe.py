@@ -1,8 +1,8 @@
 import re
 import json
-import aiohttp
+import urllib.request
+import urllib.error
 import asyncio
-import socket
 import logging
 from typing import Optional
 import discord
@@ -24,22 +24,12 @@ class VibeCog(commands.Cog):
             "llm_model": "nemotron-3-super-free",
         }
         self.config.register_global(**default_global)
-        self._session: Optional[aiohttp.ClientSession] = None
 
     async def red_delete_data_for_user(self, **kwargs):
         pass
 
-    @property
-    def session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            # Force IPv4 to avoid IPv6 timeout issues
-            connector = aiohttp.TCPConnector(family=socket.AF_INET)
-            self._session = aiohttp.ClientSession(connector=connector)
-        return self._session
-
     async def cog_unload(self):
-        if self._session and not self._session.closed:
-            await self._session.close()
+        pass
 
     @commands.group(name="vibe", aliases=["v"])
     async def vibe_group(self, ctx: commands.Context):
@@ -136,39 +126,45 @@ class VibeCog(commands.Cog):
             "Do not include any explanation, markdown, or text outside the JSON."
         )
 
-        body = {
+        body = json.dumps({
             "model": model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Create a playlist for this vibe: \"{vibe}\""},
             ],
             "max_tokens": 2000,
+        }).encode('utf-8')
+
+        url = f"{base_url}/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
         }
 
-        log.info(f"Sending request to {base_url}/chat/completions with model {model}")
+        log.info(f"Sending request to {url} with model {model}")
+
+        def do_request():
+            req = urllib.request.Request(url, data=body, headers=headers, method='POST')
+            with urllib.request.urlopen(req, timeout=30) as response:
+                return response.read().decode('utf-8')
 
         try:
-            async with self.session.post(
-                f"{base_url}/chat/completions",
-                headers={
-                    "Content-Type": "application/json",
-                    "x-api-key": api_key,
-                },
-                json=body,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                log.info(f"LLM response status: {resp.status}")
-                if resp.status != 200:
-                    text = await resp.text()
-                    log.error(f"LLM API error: {text}")
-                    raise RuntimeError(f"LLM API error {resp.status}: {text}")
+            response_text = await asyncio.to_thread(do_request)
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode('utf-8', errors='replace')
+            log.error(f"LLM HTTP error {e.code}: {error_body}")
+            raise RuntimeError(f"LLM API error {e.code}: {error_body}")
+        except urllib.error.URLError as e:
+            log.error(f"LLM URL error: {e.reason}")
+            raise RuntimeError(f"LLM connection error: {e.reason}")
 
-                data = await resp.json()
-                log.info(f"LLM response data: {json.dumps(data)[:500]}...")
+        log.info(f"LLM response received, length: {len(response_text)} chars")
 
-        except aiohttp.ClientError as e:
-            log.error(f"HTTP request failed: {e}")
-            raise RuntimeError(f"HTTP request failed: {e}")
+        try:
+            data = json.loads(response_text)
+        except json.JSONDecodeError:
+            log.error(f"Invalid JSON response: {response_text[:500]}")
+            raise RuntimeError(f"Invalid JSON from LLM: {response_text[:200]}")
 
         choice = data.get("choices", [{}])[0]
         content = choice.get("message", {}).get("content", "")
