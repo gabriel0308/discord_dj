@@ -118,6 +118,8 @@ class VibeCog(commands.Cog):
         base_url = await self.config.llm_base_url()
         model = await self.config.llm_model()
 
+        log.info(f"LLM config: api_key={'SET' if api_key else 'NOT SET'}, base_url={base_url}, model={model}")
+
         if not api_key:
             raise ValueError("LLM API key not set. Use `[p]vibe set api_key <key>`")
 
@@ -138,20 +140,30 @@ class VibeCog(commands.Cog):
             "max_tokens": 2000,
         }
 
-        async with self.session.post(
-            f"{base_url}/chat/completions",
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": api_key,
-            },
-            json=body,
-            timeout=aiohttp.ClientTimeout(total=30),
-        ) as resp:
-            if resp.status != 200:
-                text = await resp.text()
-                raise RuntimeError(f"LLM API error {resp.status}: {text}")
+        log.info(f"Sending request to {base_url}/chat/completions with model {model}")
 
-            data = await resp.json()
+        try:
+            async with self.session.post(
+                f"{base_url}/chat/completions",
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": api_key,
+                },
+                json=body,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                log.info(f"LLM response status: {resp.status}")
+                if resp.status != 200:
+                    text = await resp.text()
+                    log.error(f"LLM API error: {text}")
+                    raise RuntimeError(f"LLM API error {resp.status}: {text}")
+
+                data = await resp.json()
+                log.info(f"LLM response data: {json.dumps(data)[:500]}...")
+
+        except aiohttp.ClientError as e:
+            log.error(f"HTTP request failed: {e}")
+            raise RuntimeError(f"HTTP request failed: {e}")
 
         choice = data.get("choices", [{}])[0]
         content = choice.get("message", {}).get("content", "")
