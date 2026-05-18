@@ -1,5 +1,6 @@
 import re
 import json
+import aiohttp
 import asyncio
 import logging
 from typing import Optional
@@ -142,27 +143,35 @@ class VibeCog(commands.Cog):
 
         log.info(f"Sending request to {url} with model {model}")
 
-        loop = asyncio.get_event_loop()
+        connector = aiohttp.TCPConnector(ssl=False, ttl_dns_cache=300)
+        timeout = aiohttp.ClientTimeout(total=30)
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+
         try:
-            import requests
-            resp = await loop.run_in_executor(
-                None,
-                lambda: requests.post(url, headers=headers, json=body, timeout=30)
-            )
-            log.info(f"LLM response status: {resp.status_code}")
-            if resp.status_code != 200:
-                log.error(f"LLM API error {resp.status_code}: {resp.text}")
-                raise RuntimeError(f"LLM API error {resp.status_code}: {resp.text[:500]}")
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                async with session.post(url, headers=headers, json=body) as resp:
+                    log.info(f"LLM response status: {resp.status}")
+                    if resp.status != 200:
+                        text = await resp.text()
+                        log.error(f"LLM API error {resp.status}: {text}")
+                        raise RuntimeError(f"LLM API error {resp.status}: {text[:500]}")
 
-            data = resp.json()
-            log.info(f"LLM response received, choices: {len(data.get('choices', []))}")
+                    data = await resp.json()
+                    log.info(f"LLM response received, choices: {len(data.get('choices', []))}")
 
-        except requests.exceptions.Timeout:
-            log.error("LLM request timed out")
-            raise RuntimeError("LLM request timed out")
-        except requests.exceptions.RequestException as e:
+        except aiohttp.ClientConnectorError as e:
             log.error(f"Connection failed: {e}")
             raise RuntimeError(f"Connection failed: {e}")
+        except asyncio.TimeoutError:
+            log.error("LLM request timed out")
+            raise RuntimeError("LLM request timed out")
 
         choice = data.get("choices", [{}])[0]
         content = choice.get("message", {}).get("content", "")
