@@ -121,7 +121,7 @@ class VibeCog(commands.Cog):
 
         system_prompt = (
             "You are a music curator assistant. Given a vibe, genre, band, or song, "
-            "return a JSON array of exactly 20 songs.\n\n"
+            "return a JSON array of exactly 10 songs.\n\n"
             "Return ONLY a JSON array in this exact format, nothing else:\n"
             '[{"title": "Song Name", "artist": "Artist Name", "year": "1999"}]\n\n'
             "Do not include any explanation, markdown, or text outside the JSON."
@@ -152,49 +152,42 @@ class VibeCog(commands.Cog):
             body["model"] = attempt_model
             log.info(f"Trying model: {attempt_model}")
 
-            for attempt in range(3):
-                connector = aiohttp.TCPConnector(ssl=False, ttl_dns_cache=300)
-                timeout = aiohttp.ClientTimeout(total=30)
+            connector = aiohttp.TCPConnector(ssl=False, ttl_dns_cache=300)
+            timeout = aiohttp.ClientTimeout(total=30)
 
-                try:
-                    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-                        async with session.post(url, headers=headers, json=body) as resp:
-                            log.info(f"LLM response status: {resp.status} (attempt {attempt + 1})")
-                            if resp.status == 429:
-                                text = await resp.text()
-                                log.warning(f"Rate limited on {attempt_model}, attempt {attempt + 1}: {text}")
-                                if attempt < 2:
-                                    await asyncio.sleep(5 * (attempt + 1))
-                                    continue
-                                last_error = f"Rate limit exceeded on {attempt_model}"
-                                break
+            try:
+                async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                    async with session.post(url, headers=headers, json=body) as resp:
+                        log.info(f"LLM response status: {resp.status}")
+                        if resp.status == 429:
+                            text = await resp.text()
+                            log.warning(f"Rate limited on {attempt_model}, trying next model: {text}")
+                            last_error = f"Rate limit exceeded on {attempt_model}"
+                            continue
 
-                            if resp.status != 200:
-                                text = await resp.text()
-                                log.error(f"LLM API error {resp.status}: {text}")
-                                last_error = f"LLM API error {resp.status}: {text[:500]}"
-                                break
+                        if resp.status != 200:
+                            text = await resp.text()
+                            log.error(f"LLM API error {resp.status}: {text}")
+                            last_error = f"LLM API error {resp.status}: {text[:500]}"
+                            continue
 
-                            data = await resp.json()
-                            log.info(f"LLM response received, choices: {len(data.get('choices', []))}")
-                            choice = data.get("choices", [{}])[0]
-                            content = choice.get("message", {}).get("content", "")
+                        data = await resp.json()
+                        log.info(f"LLM response received, choices: {len(data.get('choices', []))}")
+                        choice = data.get("choices", [{}])[0]
+                        content = choice.get("message", {}).get("content", "")
 
-                            if not content:
-                                last_error = "Empty response from LLM"
-                                break
+                        if not content:
+                            last_error = "Empty response from LLM"
+                            continue
 
-                            return self._parse_response(content)
+                        return self._parse_response(content)
 
-                except aiohttp.ClientConnectorError as e:
-                    log.error(f"Connection failed: {e}")
-                    last_error = f"Connection failed: {e}"
-                except asyncio.TimeoutError:
-                    log.error("LLM request timed out")
-                    last_error = "LLM request timed out"
-
-                if attempt < 2:
-                    await asyncio.sleep(2)
+            except aiohttp.ClientConnectorError as e:
+                log.error(f"Connection failed: {e}")
+                last_error = f"Connection failed: {e}"
+            except asyncio.TimeoutError:
+                log.error("LLM request timed out")
+                last_error = "LLM request timed out"
 
         raise RuntimeError(last_error or "All models failed")
 
