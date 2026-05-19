@@ -205,9 +205,21 @@ class VibeCog(commands.Cog):
         elif json_str.startswith("```"):
             json_str = json_str.replace("```", "").strip()
 
-        data = json.loads(json_str)
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError:
+            json_str = self._try_fix_json(json_str)
+            if json_str:
+                try:
+                    data = json.loads(json_str)
+                except json.JSONDecodeError:
+                    data = None
+            else:
+                data = None
 
-        if isinstance(data, list):
+        if data is None:
+            songs = self._regex_fallback(content)
+        elif isinstance(data, list):
             songs = data
         elif isinstance(data, dict) and "songs" in data:
             songs = data["songs"]
@@ -219,3 +231,27 @@ class VibeCog(commands.Cog):
             for s in songs
             if s.get("title") and s.get("artist")
         ]
+
+    def _try_fix_json(self, json_str: str) -> str:
+        json_str = json_str.rstrip(", \n\r\t")
+        if not json_str.startswith("["):
+            start = json_str.find("[")
+            if start != -1:
+                json_str = json_str[start:]
+            else:
+                return ""
+        if not json_str.endswith("]"):
+            last_bracket = json_str.rfind("]")
+            if last_bracket != -1:
+                json_str = json_str[:last_bracket + 1]
+            else:
+                json_str = json_str.rstrip() + "]"
+        json_str = json_str.rstrip("]")
+        json_str = json_str.rstrip(", \n\r\t")
+        json_str += "]"
+        return json_str
+
+    def _regex_fallback(self, content: str) -> list:
+        pattern = r'"title"\s*:\s*"([^"]+)"\s*,\s*"artist"\s*:\s*"([^"]+)"'
+        matches = re.findall(pattern, content)
+        return [{"title": t, "artist": a, "year": ""} for t, a in matches]
