@@ -54,16 +54,20 @@ class VibeCog(commands.Cog):
 
         await ctx.send(f"🎵 Generating playlist for vibe: **{query}**...")
 
+        songs = None
         try:
             songs = await self.generate_playlist(query)
         except Exception as e:
-            import traceback
-            tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
-            await ctx.send(f"❌ Failed to generate playlist:\n```\n{tb[:1900]}\n```")
-            return
+            log.warning(f"LLM failed, falling back to direct search: {e}")
+            await ctx.send(f"⚠️ AI unavailable, searching directly for **{query}**...")
 
         if not songs:
-            await ctx.send("❌ No songs found for that vibe.")
+            play_cmd = self.bot.get_command("play")
+            if play_cmd is None:
+                await ctx.send("❌ Could not find the `play` command.")
+                return
+            await ctx.invoke(play_cmd, query=f"ytsearch10:{query}")
+            await ctx.send(f"✅ Searching directly for **{query}** on YouTube.")
             return
 
         await ctx.send(f"📋 Found {len(songs)} songs. Adding to queue...")
