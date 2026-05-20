@@ -113,6 +113,23 @@ class VibeCog(commands.Cog):
         display = f"{value[:10]}..." if len(value) > 10 else value
         await ctx.send(f"✅ Set `{key}` to `{display}`")
 
+    @vibe_group.command(name="debug")
+    @commands.is_owner()
+    async def vibe_debug(self, ctx: commands.Context):
+        """Show current LLM config and recent log entries."""
+        api_key = await self.config.llm_api_key()
+        base_url = await self.config.llm_base_url()
+        model = await self.config.llm_model()
+        gemini_key = await self.config.gemini_api_key()
+
+        msg = f"**LLM Config:**\n"
+        msg += f"API Key: `{'SET' if api_key else 'NOT SET'}`\n"
+        msg += f"Base URL: `{base_url}`\n"
+        msg += f"Model: `{model}`\n"
+        msg += f"Gemini Key: `{'SET' if gemini_key else 'NOT SET'}`\n"
+
+        await ctx.send(msg)
+
     FALLBACK_MODELS = ["qwen3.6-plus-free", "deepseek-v4-flash-free", "minimax-m2.5-free"]
 
     async def generate_playlist(self, vibe: str) -> list:
@@ -209,25 +226,35 @@ class VibeCog(commands.Cog):
             "generationConfig": {"maxOutputTokens": 2000, "temperature": 0.7},
         }
 
+        masked_key = api_key[:8] + "..." if len(api_key) > 8 else "***"
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
         headers = {"Content-Type": "application/json"}
+
+        log.info(f"Gemini request: POST {url.split('?')[0]}?key={masked_key}")
+        log.info(f"Gemini request body: {json.dumps(body, indent=2)}")
 
         connector = aiohttp.TCPConnector(ssl=False, ttl_dns_cache=300)
         timeout = aiohttp.ClientTimeout(total=15)
 
         async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
             async with session.post(url, headers=headers, json=body) as resp:
+                text = await resp.text()
                 log.info(f"Gemini response status: {resp.status}")
-                if resp.status != 200:
-                    text = await resp.text()
-                    log.error(f"Gemini API error {resp.status}: {text}")
-                    raise RuntimeError(f"Gemini API error {resp.status}")
+                log.info(f"Gemini response headers: {dict(resp.headers)}")
+                log.info(f"Gemini response body: {text}")
 
-                data = await resp.json()
+                if resp.status != 200:
+                    raise RuntimeError(f"Gemini API error {resp.status}: {text[:1000]}")
+
+                try:
+                    data = json.loads(text)
+                except json.JSONDecodeError:
+                    raise RuntimeError(f"Gemini returned invalid JSON: {text[:500]}")
+
                 content = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
 
                 if not content:
-                    raise RuntimeError("Empty response from Gemini")
+                    raise RuntimeError(f"Empty response from Gemini: {data}")
 
                 return self._parse_response(content)
 
