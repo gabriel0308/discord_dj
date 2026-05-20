@@ -149,7 +149,7 @@ class VibeCog(commands.Cog):
             "Accept-Language": "en-US,en;q=0.9",
         }
 
-        models_to_try = [model] + [m for m in self.FALLBACK_MODELS if m != model]
+        models_to_try = [model]
         last_error = None
 
         for attempt_model in models_to_try:
@@ -157,23 +157,19 @@ class VibeCog(commands.Cog):
             log.info(f"Trying model: {attempt_model}")
 
             connector = aiohttp.TCPConnector(ssl=False, ttl_dns_cache=300)
-            timeout = aiohttp.ClientTimeout(total=30)
+            timeout = aiohttp.ClientTimeout(total=15)
 
             try:
                 async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
                     async with session.post(url, headers=headers, json=body) as resp:
                         log.info(f"LLM response status: {resp.status}")
                         if resp.status == 429:
-                            text = await resp.text()
-                            log.warning(f"Rate limited on {attempt_model}, trying next model: {text}")
-                            last_error = f"Rate limit exceeded on {attempt_model}"
-                            continue
+                            raise RuntimeError("Rate limited, using direct search")
 
                         if resp.status != 200:
                             text = await resp.text()
                             log.error(f"LLM API error {resp.status}: {text}")
-                            last_error = f"LLM API error {resp.status}: {text[:500]}"
-                            continue
+                            raise RuntimeError(f"LLM API error {resp.status}")
 
                         data = await resp.json()
                         log.info(f"LLM response received, choices: {len(data.get('choices', []))}")
@@ -181,17 +177,14 @@ class VibeCog(commands.Cog):
                         content = choice.get("message", {}).get("content", "")
 
                         if not content:
-                            last_error = "Empty response from LLM"
-                            continue
+                            raise RuntimeError("Empty response from LLM")
 
                         return self._parse_response(content)
 
             except aiohttp.ClientConnectorError as e:
-                log.error(f"Connection failed: {e}")
-                last_error = f"Connection failed: {e}"
+                raise RuntimeError(f"Connection failed: {e}")
             except asyncio.TimeoutError:
-                log.error("LLM request timed out")
-                last_error = "LLM request timed out"
+                raise RuntimeError("LLM request timed out")
 
         raise RuntimeError(last_error or "All models failed")
 
