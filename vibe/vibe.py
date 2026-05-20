@@ -256,7 +256,7 @@ class VibeCog(commands.Cog):
         }
 
         masked_key = api_key[:8] + "..." if len(api_key) > 8 else "***"
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={api_key}"
         headers = {"Content-Type": "application/json"}
 
         log.info(f"Gemini request: POST {url.split('?')[0]}?key={masked_key}")
