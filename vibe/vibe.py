@@ -161,6 +161,10 @@ class VibeCog(commands.Cog):
         system_prompt = (
             "You are a music curator assistant. Given a vibe, genre, band, or song, "
             "return a JSON array of exactly 10 songs.\n\n"
+            "Rules:\n"
+            "1. The FIRST song MUST be an exact match for the query (the exact song or artist requested).\n"
+            "2. The remaining 9 songs must be from DIFFERENT artists — no repeated artists.\n"
+            "3. Choose songs that match the vibe/genre/era of the query.\n\n"
             "Return ONLY a JSON array in this exact format, nothing else:\n"
             '[{"title": "Song Name", "artist": "Artist Name", "year": "1999"}]\n\n'
             "Do not include any explanation, markdown, or text outside the JSON."
@@ -314,11 +318,21 @@ class VibeCog(commands.Cog):
         else:
             raise ValueError("Invalid LLM response format")
 
-        return [
+        parsed = [
             {"title": s.get("title", ""), "artist": s.get("artist", ""), "year": s.get("year", "")}
             for s in songs
             if s.get("title") and s.get("artist")
         ]
+
+        seen_artists = set()
+        deduped = []
+        for s in parsed:
+            artist_lower = s["artist"].lower()
+            if artist_lower not in seen_artists:
+                seen_artists.add(artist_lower)
+                deduped.append(s)
+
+        return deduped
 
     def _try_fix_json(self, json_str: str) -> str:
         json_str = json_str.rstrip(", \n\r\t")
