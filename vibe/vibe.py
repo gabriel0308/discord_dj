@@ -20,7 +20,7 @@ class VibeCog(commands.Cog):
         default_global = {
             "llm_api_key": "",
             "llm_base_url": "https://opencode.ai/zen/v1",
-            "llm_model": "nemotron-3-super-free",
+            "llm_model": "gpt-5.1",
             "gemini_api_key": "AIzaSyDZgXVvwZ0lB07A4VIJQ2WIf62qit52a6Q",
         }
         self.config.register_global(**default_global)
@@ -67,7 +67,7 @@ class VibeCog(commands.Cog):
             if play_cmd is None:
                 await ctx.send("❌ Could not find the `play` command.")
                 return
-            await ctx.invoke(play_cmd, query=f"ytsearch10:{query}")
+            await ctx.invoke(play_cmd, query=f"ytsearch:{query}")
             await ctx.send(f"✅ Searching directly for **{query}** on YouTube.")
             return
 
@@ -112,6 +112,27 @@ class VibeCog(commands.Cog):
         await getattr(self.config, config_key).set(value)
         display = f"{value[:10]}..." if len(value) > 10 else value
         await ctx.send(f"✅ Set `{key}` to `{display}`")
+
+    @vibe_group.command(name="direct", aliases=["d"])
+    async def vibe_direct(self, ctx: commands.Context, *, query: str):
+        """Search and play directly on YouTube without AI.
+
+        Example: `[p]vibe direct slipknot`
+        """
+        audio = self.bot.get_cog("Audio")
+        if audio is None:
+            await ctx.send("❌ Audio cog not loaded.")
+            return
+        if not ctx.author.voice:
+            await ctx.send("❌ You need to be in a voice channel!")
+            return
+
+        await ctx.send(f"🔍 Searching YouTube for **{query}**...")
+        play_cmd = self.bot.get_command("play")
+        if play_cmd is None:
+            await ctx.send("❌ Could not find the `play` command.")
+            return
+        await ctx.invoke(play_cmd, query=f"ytsearch:{query}")
 
     @vibe_group.command(name="debug")
     @commands.is_owner()
@@ -169,7 +190,15 @@ class VibeCog(commands.Cog):
             "Accept-Language": "en-US,en;q=0.9",
         }
 
-        connector = aiohttp.TCPConnector(ssl=False, ttl_dns_cache=300)
+        models_to_try = [model]
+        last_error = None
+
+        for attempt_model in models_to_try:
+            body["model"] = attempt_model
+            log.info(f"Trying Zen model: {attempt_model}")
+            log.info(f"Zen request body: {json.dumps(body, indent=2)[:500]}")
+
+            connector = aiohttp.TCPConnector(ssl=False, ttl_dns_cache=300)
         timeout = aiohttp.ClientTimeout(total=15)
 
         try:
