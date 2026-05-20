@@ -35,11 +35,19 @@ class VibeCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_red_audio_track_end(self, guild_id: int, track, player):
-        queue = player.queue or []
-        if len(queue) <= 1:
-            state = self.session_state.get(guild_id)
-            if state and state.get("active"):
-                await self._auto_extend(guild_id, state)
+        if player is None:
+            return
+
+        try:
+            queue = getattr(player, "queue", None) or []
+            queue_len = len(queue) if isinstance(queue, list) else 0
+
+            if queue_len <= 1:
+                state = self.session_state.get(guild_id)
+                if state and state.get("active"):
+                    await self._auto_extend(guild_id, state)
+        except Exception as e:
+            log.error(f"Error in on_red_audio_track_end: {e}")
 
     async def _auto_extend(self, guild_id: int, state: dict):
         vibe = state.get("vibe", "")
