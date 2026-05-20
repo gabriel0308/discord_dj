@@ -21,7 +21,7 @@ class VibeCog(commands.Cog):
             "llm_api_key": "",
             "llm_base_url": "https://opencode.ai/zen/v1",
             "llm_model": "gpt-5.1",
-            "gemini_api_key": "AIzaSyDZgXVvwZ0lB07A4VIJQ2WIf62qit52a6Q",
+            "gemini_api_key": "",
         }
         self.config.register_global(**default_global)
 
@@ -144,25 +144,19 @@ class VibeCog(commands.Cog):
         gemini_key = await self.config.gemini_api_key()
 
         msg = f"**LLM Config:**\n"
-        msg += f"API Key: `{'SET' if api_key else 'NOT SET'}`\n"
-        msg += f"Base URL: `{base_url}`\n"
-        msg += f"Model: `{model}`\n"
+        msg += f"Zen API Key: `{'SET' if api_key else 'NOT SET'}`\n"
+        msg += f"Zen Base URL: `{base_url}`\n"
+        msg += f"Zen Model: `{model}`\n"
         msg += f"Gemini Key: `{'SET' if gemini_key else 'NOT SET'}`\n"
+        msg += f"\n**Primary:** `{'Gemini' if gemini_key else 'Zen'}`"
 
         await ctx.send(msg)
 
-    FALLBACK_MODELS = ["qwen3.6-plus-free", "deepseek-v4-flash-free", "minimax-m2.5-free"]
-
     async def generate_playlist(self, vibe: str) -> list:
+        gemini_key = await self.config.gemini_api_key()
         api_key = await self.config.llm_api_key()
         base_url = await self.config.llm_base_url()
         model = await self.config.llm_model()
-        gemini_key = await self.config.gemini_api_key()
-
-        log.info(f"LLM config: api_key={'SET' if api_key else 'NOT SET'}, base_url={base_url}, model={model}")
-
-        if not api_key:
-            raise ValueError("LLM API key not set. Use `[p]vibe set api_key <key>`")
 
         system_prompt = (
             "You are a music curator assistant. Given a vibe, genre, band, or song, "
@@ -172,7 +166,25 @@ class VibeCog(commands.Cog):
             "Do not include any explanation, markdown, or text outside the JSON."
         )
 
+        if gemini_key:
+            log.info("Using Gemini as primary provider")
+            try:
+                return await self._call_gemini(vibe, gemini_key, system_prompt)
+            except Exception as e:
+                log.warning(f"Gemini failed: {e}")
+
+        if api_key:
+            log.info(f"Using Zen provider: {model}")
+            try:
+                return await self._call_zen(vibe, api_key, base_url, model, system_prompt)
+            except Exception as e:
+                log.warning(f"Zen failed: {e}")
+
+        raise RuntimeError("No LLM provider available")
+
+    async def _call_zen(self, vibe: str, api_key: str, base_url: str, model: str, system_prompt: str) -> list:
         body = {
+            "model": model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Create a playlist for this vibe: \"{vibe}\""},
@@ -190,64 +202,32 @@ class VibeCog(commands.Cog):
             "Accept-Language": "en-US,en;q=0.9",
         }
 
-        models_to_try = [model]
-        last_error = None
+        log.info(f"Zen request: POST {url}")
+        log.info(f"Zen request body: {json.dumps(body, indent=2)[:800]}")
 
-        for attempt_model in models_to_try:
-            body["model"] = attempt_model
-            log.info(f"Trying Zen model: {attempt_model}")
-            log.info(f"Zen request body: {json.dumps(body, indent=2)[:500]}")
-
-            connector = aiohttp.TCPConnector(ssl=False, ttl_dns_cache=300)
+        connector = aiohttp.TCPConnector(ssl=False, ttl_dns_cache=300)
         timeout = aiohttp.ClientTimeout(total=15)
 
-        try:
-            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-                async with session.post(url, headers=headers, json=body) as resp:
-                    log.info(f"LLM response status: {resp.status}")
-                    if resp.status == 429:
-                        log.warning("Zen rate limited, trying Gemini fallback")
-                        if gemini_key:
-                            return await self._call_gemini(vibe, gemini_key)
-                        raise RuntimeError("Rate limited, no Gemini key")
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            async with session.post(url, headers=headers, json=body) as resp:
+                text = await resp.text()
+                log.info(f"Zen response status: {resp.status}")
+                log.info(f"Zen response body: {text[:1000]}")
 
-                    if resp.status != 200:
-                        text = await resp.text()
-                        log.error(f"LLM API error {resp.status}: {text}")
-                        if gemini_key:
-                            return await self._call_gemini(vibe, gemini_key)
-                        raise RuntimeError(f"LLM API error {resp.status}")
+                if resp.status != 200:
+                    raise RuntimeError(f"Zen API error {resp.status}: {text[:500]}")
 
-                    data = await resp.json()
-                    log.info(f"LLM response received, choices: {len(data.get('choices', []))}")
-                    choice = data.get("choices", [{}])[0]
-                    content = choice.get("message", {}).get("content", "")
+                data = json.loads(text)
+                log.info(f"Zen response received, choices: {len(data.get('choices', []))}")
+                choice = data.get("choices", [{}])[0]
+                content = choice.get("message", {}).get("content", "")
 
-                    if not content:
-                        raise RuntimeError("Empty response from LLM")
+                if not content:
+                    raise RuntimeError("Empty response from Zen")
 
-                    return self._parse_response(content)
+                return self._parse_response(content)
 
-        except aiohttp.ClientConnectorError as e:
-            if gemini_key:
-                return await self._call_gemini(vibe, gemini_key)
-            raise RuntimeError(f"Connection failed: {e}")
-        except asyncio.TimeoutError:
-            if gemini_key:
-                return await self._call_gemini(vibe, gemini_key)
-            raise RuntimeError("LLM request timed out")
-
-        raise RuntimeError("All models failed")
-
-    async def _call_gemini(self, vibe: str, api_key: str) -> list:
-        system_prompt = (
-            "You are a music curator assistant. Given a vibe, genre, band, or song, "
-            "return a JSON array of exactly 10 songs.\n\n"
-            "Return ONLY a JSON array in this exact format, nothing else:\n"
-            '[{"title": "Song Name", "artist": "Artist Name", "year": "1999"}]\n\n'
-            "Do not include any explanation, markdown, or text outside the JSON."
-        )
-
+    async def _call_gemini(self, vibe: str, api_key: str, system_prompt: str) -> list:
         body = {
             "contents": [
                 {"role": "user", "parts": [{"text": f"{system_prompt}\n\nCreate a playlist for this vibe: \"{vibe}\""}]}
@@ -269,8 +249,7 @@ class VibeCog(commands.Cog):
             async with session.post(url, headers=headers, json=body) as resp:
                 text = await resp.text()
                 log.info(f"Gemini response status: {resp.status}")
-                log.info(f"Gemini response headers: {dict(resp.headers)}")
-                log.info(f"Gemini response body: {text}")
+                log.info(f"Gemini response body: {text[:1000]}")
 
                 if resp.status != 200:
                     raise RuntimeError(f"Gemini API error {resp.status}: {text[:1000]}")
