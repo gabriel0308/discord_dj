@@ -171,7 +171,9 @@ class VibeCog(commands.Cog):
             try:
                 return await self._call_gemini(vibe, gemini_key, system_prompt)
             except Exception as e:
+                import traceback
                 log.warning(f"Gemini failed: {e}")
+                log.warning(traceback.format_exc())
 
         if api_key:
             log.info(f"Using Zen provider: {model}")
@@ -206,26 +208,34 @@ class VibeCog(commands.Cog):
         log.info(f"Zen request body: {json.dumps(body, indent=2)[:800]}")
 
         connector = aiohttp.TCPConnector(ssl=False, ttl_dns_cache=300)
-        timeout = aiohttp.ClientTimeout(total=15)
+        timeout = aiohttp.ClientTimeout(total=30)
 
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            async with session.post(url, headers=headers, json=body) as resp:
-                text = await resp.text()
-                log.info(f"Zen response status: {resp.status}")
-                log.info(f"Zen response body: {text[:1000]}")
+        try:
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                async with session.post(url, headers=headers, json=body) as resp:
+                    text = await resp.text()
+                    log.info(f"Zen response status: {resp.status}")
+                    log.info(f"Zen response body: {text[:1000]}")
 
-                if resp.status != 200:
-                    raise RuntimeError(f"Zen API error {resp.status}: {text[:500]}")
+                    if resp.status != 200:
+                        raise RuntimeError(f"Zen API error {resp.status}: {text[:500]}")
 
-                data = json.loads(text)
-                log.info(f"Zen response received, choices: {len(data.get('choices', []))}")
-                choice = data.get("choices", [{}])[0]
-                content = choice.get("message", {}).get("content", "")
+                    data = json.loads(text)
+                    log.info(f"Zen response received, choices: {len(data.get('choices', []))}")
+                    choice = data.get("choices", [{}])[0]
+                    content = choice.get("message", {}).get("content", "")
 
-                if not content:
-                    raise RuntimeError("Empty response from Zen")
+                    if not content:
+                        raise RuntimeError("Empty response from Zen")
 
-                return self._parse_response(content)
+                    return self._parse_response(content)
+        except asyncio.TimeoutError:
+            raise RuntimeError("Zen request timed out after 30s")
+        except Exception as e:
+            import traceback
+            log.error(f"Zen exception: {e}")
+            log.error(traceback.format_exc())
+            raise
 
     async def _call_gemini(self, vibe: str, api_key: str, system_prompt: str) -> list:
         body = {
@@ -243,28 +253,38 @@ class VibeCog(commands.Cog):
         log.info(f"Gemini request body: {json.dumps(body, indent=2)}")
 
         connector = aiohttp.TCPConnector(ssl=False, ttl_dns_cache=300)
-        timeout = aiohttp.ClientTimeout(total=15)
+        timeout = aiohttp.ClientTimeout(total=60)
 
-        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-            async with session.post(url, headers=headers, json=body) as resp:
-                text = await resp.text()
-                log.info(f"Gemini response status: {resp.status}")
-                log.info(f"Gemini response body: {text[:1000]}")
+        log.info(f"Gemini timeout set to 60s")
 
-                if resp.status != 200:
-                    raise RuntimeError(f"Gemini API error {resp.status}: {text[:1000]}")
+        try:
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                async with session.post(url, headers=headers, json=body) as resp:
+                    text = await resp.text()
+                    log.info(f"Gemini response status: {resp.status}")
+                    log.info(f"Gemini response body: {text[:1000]}")
 
-                try:
-                    data = json.loads(text)
-                except json.JSONDecodeError:
-                    raise RuntimeError(f"Gemini returned invalid JSON: {text[:500]}")
+                    if resp.status != 200:
+                        raise RuntimeError(f"Gemini API error {resp.status}: {text[:1000]}")
 
-                content = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                    try:
+                        data = json.loads(text)
+                    except json.JSONDecodeError:
+                        raise RuntimeError(f"Gemini returned invalid JSON: {text[:500]}")
 
-                if not content:
-                    raise RuntimeError(f"Empty response from Gemini: {data}")
+                    content = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
 
-                return self._parse_response(content)
+                    if not content:
+                        raise RuntimeError(f"Empty response from Gemini: {data}")
+
+                    return self._parse_response(content)
+        except asyncio.TimeoutError:
+            raise RuntimeError("Gemini request timed out after 60s")
+        except Exception as e:
+            import traceback
+            log.error(f"Gemini exception: {e}")
+            log.error(traceback.format_exc())
+            raise
 
     def _parse_response(self, content: str) -> list:
         json_str = content.strip()
