@@ -25,11 +25,106 @@ class VibeCog(commands.Cog):
         }
         self.config.register_global(**default_global)
 
+        self.session_state = {}
+
     async def red_delete_data_for_user(self, **kwargs):
         pass
 
     async def cog_unload(self):
-        pass
+        self.session_state.clear()
+
+    @commands.Cog.listener()
+    async def on_red_audio_track_end(self, guild_id: int, track, player):
+        queue = player.queue or []
+        if len(queue) <= 1:
+            state = self.session_state.get(guild_id)
+            if state and state.get("active"):
+                await self._auto_extend(guild_id, state)
+
+    async def _auto_extend(self, guild_id: int, state: dict):
+        vibe = state.get("vibe", "")
+        played = state.get("played", [])
+        channel_id = state.get("channel_id")
+
+        if not vibe or not channel_id:
+            return
+
+        channel = self.bot.get_channel(channel_id)
+        if not channel:
+            return
+
+        log.info(f"Auto-extending playlist for guild {guild_id}, vibe: {vibe}")
+        await channel.send(f"🔄 Queue ending! Generating 10 more songs for **{vibe}**...")
+
+        exclude_list = ", ".join([f'"{s["title"]}" by "{s["artist"]}"' for s in played[-20:]])
+        system_prompt = (
+            f"You are a music curator assistant. Return a JSON array of exactly 10 songs.\n\n"
+            f"Vibe/genre: {vibe}\n"
+            f"DO NOT repeat any of these recently played songs:\n[{exclude_list}]\n\n"
+            "Rules:\n"
+            "1. All 10 songs must be from DIFFERENT artists — no repeated artists.\n"
+            "2. None of the songs should match the recently played list above.\n"
+            "3. Choose songs that match the vibe/genre/era.\n\n"
+            "Return ONLY a JSON array in this exact format, nothing else:\n"
+            '[{"title": "Song Name", "artist": "Artist Name", "year": "1999"}]\n\n'
+            "Do not include any explanation, markdown, or text outside the JSON."
+        )
+
+        try:
+            gemini_key = await self.config.gemini_api_key()
+            api_key = await self.config.llm_api_key()
+            base_url = await self.config.llm_base_url()
+            model = await self.config.llm_model()
+
+            songs = None
+            if gemini_key:
+                try:
+                    songs = await self._call_gemini(vibe, gemini_key, system_prompt)
+                except Exception as e:
+                    log.warning(f"Gemini auto-extend failed: {e}")
+
+            if not songs and api_key:
+                try:
+                    songs = await self._call_zen(vibe, api_key, base_url, model, system_prompt)
+                except Exception as e:
+                    log.warning(f"Zen auto-extend failed: {e}")
+
+            if not songs:
+                await channel.send("⚠️ Could not generate more songs. Queue will end.")
+                return
+
+            play_cmd = self.bot.get_command("play")
+            if play_cmd is None:
+                return
+
+            added = 0
+            for song in songs:
+                search_query = f"{song['title']} {song['artist']}"
+                try:
+                    fake_ctx = await self._build_fake_ctx(channel)
+                    await fake_ctx.invoke(play_cmd, query=search_query)
+                    added += 1
+                    state["played"].append(song)
+                    await asyncio.sleep(0.5)
+                except Exception as e:
+                    log.debug(f"Auto-extend enqueue failed for '{search_query}': {e}")
+                    continue
+
+            await channel.send(f"✅ Added {added} more songs to the queue!")
+
+        except Exception as e:
+            log.error(f"Auto-extend error: {e}")
+            await channel.send(f"⚠️ Error extending playlist: {str(e)[:200]}")
+
+    async def _build_fake_ctx(self, channel):
+        guild = channel.guild
+        member = guild.me
+        message = discord.Object(id=0)
+        message.channel = channel
+        message.guild = guild
+        message.author = member
+        message._state = channel._state
+        return await self.bot.get_context(message)
 
     @commands.group(name="vibe", aliases=["v"])
     async def vibe_group(self, ctx: commands.Context):
@@ -91,6 +186,13 @@ class VibeCog(commands.Cog):
 
         await ctx.send(f"✅ Added {added}/{len(songs)} songs to the queue. Now playing!")
 
+        self.session_state[ctx.guild.id] = {
+            "vibe": query,
+            "active": True,
+            "channel_id": ctx.channel.id,
+            "played": songs[:added],
+        }
+
     @vibe_group.command(name="set")
     @commands.is_owner()
     async def vibe_set(self, ctx: commands.Context, key: str, *, value: str):
@@ -149,6 +251,34 @@ class VibeCog(commands.Cog):
         msg += f"Zen Model: `{model}`\n"
         msg += f"Gemini Key: `{'SET' if gemini_key else 'NOT SET'}`\n"
         msg += f"\n**Primary:** `{'Gemini' if gemini_key else 'Zen'}`"
+
+        await ctx.send(msg)
+
+    @vibe_group.command(name="stop", aliases=["s"])
+    async def vibe_stop(self, ctx: commands.Context):
+        """Stop auto-extending the playlist."""
+        state = self.session_state.get(ctx.guild.id)
+        if state:
+            state["active"] = False
+            await ctx.send("✅ Auto-extend disabled. Queue will end when finished.")
+        else:
+            await ctx.send("No active vibe session.")
+
+    @vibe_group.command(name="status")
+    async def vibe_status(self, ctx: commands.Context):
+        """Show current vibe session status."""
+        state = self.session_state.get(ctx.guild.id)
+        if not state:
+            await ctx.send("No active vibe session.")
+            return
+
+        msg = f"**Vibe Session:**\n"
+        msg += f"Vibe: **{state['vibe']}**\n"
+        msg += f"Auto-extend: `{'ON' if state['active'] else 'OFF'}`\n"
+        msg += f"Songs played: `{len(state['played'])}`\n"
+        if state["played"]:
+            last = state["played"][-1]
+            msg += f"Last: `{last['title']}` by `{last['artist']}`"
 
         await ctx.send(msg)
 
