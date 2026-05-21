@@ -109,13 +109,14 @@ class VibeCog(commands.Cog):
             for song in songs:
                 search_query = f"{song['title']} {song['artist']}"
                 try:
+                    log.info(f"Auto-extend enqueueing: {search_query}")
                     fake_ctx = await self._build_fake_ctx(channel)
                     await fake_ctx.invoke(play_cmd, query=search_query)
                     added += 1
                     state["played"].append(song)
                     await asyncio.sleep(0.5)
                 except Exception as e:
-                    log.debug(f"Auto-extend enqueue failed for '{search_query}': {e}")
+                    log.warning(f"Auto-extend enqueue failed for '{search_query}': {e}")
                     continue
 
             await channel.send(f"✅ Added {added} more songs to the queue!")
@@ -185,11 +186,13 @@ class VibeCog(commands.Cog):
         for song in songs:
             search_query = f"{song['title']} {song['artist']}"
             try:
+                log.info(f"Enqueueing: {search_query}")
                 await ctx.invoke(play_cmd, query=search_query)
                 added += 1
+                log.info(f"Successfully enqueued {added}/{len(songs)}")
                 await asyncio.sleep(0.5)
             except Exception as e:
-                log.debug(f"Failed to enqueue '{search_query}': {e}")
+                log.warning(f"Failed to enqueue '{search_query}': {e}")
                 continue
 
         await ctx.send(f"✅ Added {added}/{len(songs)} songs to the queue. Now playing!")
