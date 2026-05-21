@@ -35,30 +35,25 @@ class VibeCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_red_audio_track_end(self, guild: discord.Guild, track, requester):
-        log.info(f"Track ended: guild={guild.id}, track={track.title if track else 'None'}, requester={requester}")
+        state = self.session_state.get(guild.id)
+        if not state or not state.get("active"):
+            return
 
-        try:
-            audio_cog = self.bot.get_cog("Audio")
-            if not audio_cog:
-                return
+        played = state.get("played", [])
+        total_added = state.get("total_added", 0)
 
-            all_data = await audio_cog.config.all_guilds()
-            guild_data = all_data.get(guild.id, {})
-            queue = guild_data.get("queue", []) or []
-            queue_len = len(queue)
-            log.info(f"Queue length: {queue_len}")
+        if track and total_added > 0:
+            state["tracks_ended"] = state.get("tracks_ended", 0) + 1
+            ended = state["tracks_ended"]
+            log.info(f"Track ended: {track.title}, count={ended}/{total_added}")
 
-            if queue_len <= 1:
-                state = self.session_state.get(guild.id)
-                if state and state.get("active"):
-                    log.info(f"Queue nearly empty, triggering auto-extend for guild {guild.id}")
-                    state["active"] = False
-                    await self._auto_extend(guild.id, state)
-                    state["active"] = True
-        except Exception as e:
-            log.error(f"Error in on_red_audio_track_end: {e}")
-            import traceback
-            log.error(traceback.format_exc())
+            if ended >= total_added:
+                log.info(f"All {total_added} tracks played, triggering auto-extend")
+                state["active"] = False
+                state["tracks_ended"] = 0
+                state["total_added"] = 0
+                await self._auto_extend(guild.id, state)
+                state["active"] = True
 
     async def _auto_extend(self, guild_id: int, state: dict):
         vibe = state.get("vibe", "")
@@ -124,11 +119,14 @@ class VibeCog(commands.Cog):
                     fake_ctx = await self._build_fake_ctx(channel)
                     await fake_ctx.invoke(play_cmd, query=search_query)
                     added += 1
-                    state["played"].append(song)
                     await asyncio.sleep(0.5)
                 except Exception as e:
                     log.warning(f"Auto-extend enqueue failed for '{search_query}': {e}")
                     continue
+
+            state["played"].extend(songs[:added])
+            state["total_added"] = added
+            state["tracks_ended"] = 0
 
             await channel.send(f"✅ Added {added} more songs to the queue!")
 
@@ -213,6 +211,8 @@ class VibeCog(commands.Cog):
             "active": True,
             "channel_id": ctx.channel.id,
             "played": songs[:added],
+            "total_added": added,
+            "tracks_ended": 0,
         }
 
     @vibe_group.command(name="set")
