@@ -42,8 +42,9 @@ class VibeCog(commands.Cog):
             if not audio_cog:
                 return
 
-            player_data = await audio_cog.config.guild(guild).player()
-            queue = player_data.get("queue", []) or []
+            all_data = await audio_cog.config.all_guilds()
+            guild_data = all_data.get(guild.id, {})
+            queue = guild_data.get("queue", []) or []
             queue_len = len(queue)
             log.info(f"Queue length: {queue_len}")
 
