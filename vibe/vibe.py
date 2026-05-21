@@ -34,7 +34,8 @@ class VibeCog(commands.Cog):
         self.session_state.clear()
 
     @commands.Cog.listener()
-    async def on_red_audio_track_end(self, guild: discord.Guild, track, requester):
+    async def on_red_audio_queue_end(self, guild: discord.Guild, track, requester):
+        log.info(f"Queue ended for guild {guild.id}")
         state = self.session_state.get(guild.id)
         if not state or not state.get("active"):
             return
@@ -42,24 +43,12 @@ class VibeCog(commands.Cog):
         if state.get("extending"):
             return
 
-        total_added = state.get("total_added", 0)
-        if total_added <= 0:
-            return
-
-        if track:
-            state["tracks_ended"] = state.get("tracks_ended", 0) + 1
-            ended = state["tracks_ended"]
-            log.info(f"Track ended: {track.title}, count={ended}/{total_added}")
-
-            if ended >= total_added - 1:
-                log.info(f"Near end of queue ({ended}/{total_added}), triggering auto-extend")
-                state["active"] = False
-                state["extending"] = True
-                state["tracks_ended"] = 0
-                state["total_added"] = 0
-                await self._auto_extend(guild.id, state)
-                state["active"] = True
-                state["extending"] = False
+        log.info(f"Triggering auto-extend for guild {guild.id}")
+        state["active"] = False
+        state["extending"] = True
+        await self._auto_extend(guild.id, state)
+        state["active"] = True
+        state["extending"] = False
 
     async def _auto_extend(self, guild_id: int, state: dict):
         vibe = state.get("vibe", "")
@@ -131,8 +120,6 @@ class VibeCog(commands.Cog):
                     continue
 
             state["played"].extend(songs[:added])
-            state["total_added"] = added
-            state["tracks_ended"] = 0
 
             await channel.send(f"✅ Added {added} more songs to the queue!")
 
@@ -217,8 +204,6 @@ class VibeCog(commands.Cog):
             "active": True,
             "channel_id": ctx.channel.id,
             "played": songs[:added],
-            "total_added": added,
-            "tracks_ended": 0,
             "extending": False,
         }
 
