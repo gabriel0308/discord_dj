@@ -40,22 +40,12 @@ class VibeCog(commands.Cog):
         try:
             audio_cog = self.bot.get_cog("Audio")
             if not audio_cog:
-                log.info("Audio cog not found")
                 return
 
-            player_manager = getattr(audio_cog, "player_manager", None)
-            if not player_manager:
-                log.info("No player_manager found")
-                return
-
-            player_obj = player_manager.get(guild.id)
-            if not player_obj:
-                log.info(f"No player for guild {guild.id}")
-                return
-
-            queue = getattr(player_obj, "queue", None)
-            queue_len = len(queue) if queue else 0
-            log.info(f"Player queue length: {queue_len}")
+            player_data = await audio_cog.config.guild(guild).player()
+            queue = player_data.get("queue", []) or []
+            queue_len = len(queue)
+            log.info(f"Queue length: {queue_len}")
 
             if queue_len <= 1:
                 state = self.session_state.get(guild.id)
