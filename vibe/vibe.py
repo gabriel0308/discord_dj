@@ -111,7 +111,7 @@ class VibeCog(commands.Cog):
                 search_query = f"{song['title']} {song['artist']}"
                 try:
                     log.info(f"Auto-extend enqueueing: {search_query}")
-                    fake_ctx = await self._build_fake_ctx(channel)
+                    fake_ctx = await self._build_fake_ctx(channel, search_query)
                     await fake_ctx.invoke(play_cmd, query=search_query)
                     added += 1
                     await asyncio.sleep(0.5)
@@ -127,13 +127,14 @@ class VibeCog(commands.Cog):
             log.error(f"Auto-extend error: {e}")
             await channel.send(f"⚠️ Error extending playlist: {str(e)[:200]}")
 
-    async def _build_fake_ctx(self, channel):
+    async def _build_fake_ctx(self, channel, query: str):
         guild = channel.guild
         member = guild.me
         message = discord.Object(id=0)
         message.channel = channel
         message.guild = guild
         message.author = member
+        message.content = f".play {query}"
         message._state = channel._state
         return await self.bot.get_context(message)
 
