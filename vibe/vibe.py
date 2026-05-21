@@ -5,7 +5,7 @@ import asyncio
 import logging
 from typing import Optional
 import discord
-from redbot.core import commands, Config
+from redbot.core import commands, Config, tasks
 from redbot.core.bot import Red
 from redbot.core.utils.chat_formatting import pagify, box
 
@@ -26,28 +26,55 @@ class VibeCog(commands.Cog):
         self.config.register_global(**default_global)
 
         self.session_state = {}
+        self._auto_extend_task = self._auto_extend_loop
 
     async def red_delete_data_for_user(self, **kwargs):
         pass
 
     async def cog_unload(self):
+        self._auto_extend_task.cancel()
         self.session_state.clear()
 
     @commands.Cog.listener()
     async def on_red_audio_track_end(self, guild_id: int, track, player):
-        if player is None:
-            return
+        log.info(f"Track ended in guild {guild_id}, player={player}")
 
-        try:
-            queue = getattr(player, "queue", None) or []
-            queue_len = len(queue) if isinstance(queue, list) else 0
+    @commands.Cog.listener()
+    async def on_ready(self):
+        self._auto_extend_task.start()
 
-            if queue_len <= 1:
-                state = self.session_state.get(guild_id)
-                if state and state.get("active"):
+    @tasks.loop(seconds=15)
+    async def _auto_extend_task(self):
+        for guild_id, state in list(self.session_state.items()):
+            if not state.get("active"):
+                continue
+
+            guild = self.bot.get_guild(guild_id)
+            if not guild:
+                continue
+
+            audio = self.bot.get_cog("Audio")
+            if not audio:
+                continue
+
+            try:
+                player = audio.lavalink.get_player(guild_id)
+                if not player:
+                    continue
+
+                queue_size = player.queue_size() if hasattr(player, "queue_size") else 0
+                is_playing = player.is_playing
+
+                log.info(f"Guild {guild_id}: queue_size={queue_size}, playing={is_playing}, vibe={state['vibe']}")
+
+                if queue_size <= 1 and not is_playing:
+                    log.info(f"Auto-extending playlist for guild {guild_id}")
+                    state["active"] = False
                     await self._auto_extend(guild_id, state)
-        except Exception as e:
-            log.error(f"Error in on_red_audio_track_end: {e}")
+                    state["active"] = True
+
+            except Exception as e:
+                log.error(f"Auto-extend poll error for guild {guild_id}: {e}")
 
     async def _auto_extend(self, guild_id: int, state: dict):
         vibe = state.get("vibe", "")
