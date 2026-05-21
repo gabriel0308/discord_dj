@@ -7,6 +7,7 @@ from typing import Optional
 import discord
 from redbot.core import commands, Config
 from redbot.core.bot import Red
+from redbot.core import audio
 from redbot.core.utils.chat_formatting import pagify, box
 
 log = logging.getLogger("red.vibe")
@@ -35,13 +36,28 @@ class VibeCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_red_audio_track_end(self, guild_id: int, track, player):
-        if player is None:
-            state = self.session_state.get(guild_id)
-            if state and state.get("active"):
-                log.info(f"Queue ended for guild {guild_id}, triggering auto-extend")
-                state["active"] = False
-                await self._auto_extend(guild_id, state)
-                state["active"] = True
+        log.info(f"Track ended: guild={guild_id}, track={track}, player_type={type(player).__name__ if player else 'None'}")
+
+        try:
+            p = audio.get_player(guild_id)
+            if not p:
+                log.info(f"No player for guild {guild_id}")
+                return
+
+            queue_len = len(p.queue) if p.queue else 0
+            log.info(f"Player queue length: {queue_len}")
+
+            if queue_len <= 1:
+                state = self.session_state.get(guild_id)
+                if state and state.get("active"):
+                    log.info(f"Queue nearly empty, triggering auto-extend for guild {guild_id}")
+                    state["active"] = False
+                    await self._auto_extend(guild_id, state)
+                    state["active"] = True
+        except Exception as e:
+            log.error(f"Error in on_red_audio_track_end: {e}")
+            import traceback
+            log.error(traceback.format_exc())
 
     async def _auto_extend(self, guild_id: int, state: dict):
         vibe = state.get("vibe", "")
