@@ -39,21 +39,27 @@ class VibeCog(commands.Cog):
         if not state or not state.get("active"):
             return
 
-        played = state.get("played", [])
-        total_added = state.get("total_added", 0)
+        if state.get("extending"):
+            return
 
-        if track and total_added > 0:
+        total_added = state.get("total_added", 0)
+        if total_added <= 0:
+            return
+
+        if track:
             state["tracks_ended"] = state.get("tracks_ended", 0) + 1
             ended = state["tracks_ended"]
             log.info(f"Track ended: {track.title}, count={ended}/{total_added}")
 
-            if ended >= total_added:
-                log.info(f"All {total_added} tracks played, triggering auto-extend")
+            if ended >= total_added - 1:
+                log.info(f"Near end of queue ({ended}/{total_added}), triggering auto-extend")
                 state["active"] = False
+                state["extending"] = True
                 state["tracks_ended"] = 0
                 state["total_added"] = 0
                 await self._auto_extend(guild.id, state)
                 state["active"] = True
+                state["extending"] = False
 
     async def _auto_extend(self, guild_id: int, state: dict):
         vibe = state.get("vibe", "")
@@ -213,6 +219,7 @@ class VibeCog(commands.Cog):
             "played": songs[:added],
             "total_added": added,
             "tracks_ended": 0,
+            "extending": False,
         }
 
     @vibe_group.command(name="set")
