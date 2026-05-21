@@ -5,7 +5,6 @@ import asyncio
 import logging
 from typing import Optional
 import discord
-from discord.ext import tasks
 from redbot.core import commands, Config
 from redbot.core.bot import Red
 from redbot.core.utils.chat_formatting import pagify, box
@@ -27,48 +26,22 @@ class VibeCog(commands.Cog):
         self.config.register_global(**default_global)
 
         self.session_state = {}
-        self._auto_extend_task.start()
 
     async def red_delete_data_for_user(self, **kwargs):
         pass
 
     async def cog_unload(self):
-        self._auto_extend_task.cancel()
         self.session_state.clear()
 
-    @tasks.loop(seconds=15)
-    async def _auto_extend_task(self):
-        for guild_id, state in list(self.session_state.items()):
-            if not state.get("active"):
-                continue
-
-            guild = self.bot.get_guild(guild_id)
-            if not guild:
-                continue
-
-            audio = self.bot.get_cog("Audio")
-            if not audio:
-                continue
-
-            try:
-                player = await audio.config.guild_from_id(guild_id).player()
-                if not player:
-                    continue
-
-                queue = player.get("queue", []) or []
-                queue_len = len(queue) if isinstance(queue, list) else 0
-                is_playing = player.get("playing", False)
-
-                log.info(f"Guild {guild_id}: queue_len={queue_len}, playing={is_playing}, vibe={state['vibe']}")
-
-                if queue_len <= 1 and not is_playing:
-                    log.info(f"Auto-extending playlist for guild {guild_id}")
-                    state["active"] = False
-                    await self._auto_extend(guild_id, state)
-                    state["active"] = True
-
-            except Exception as e:
-                log.error(f"Auto-extend poll error for guild {guild_id}: {e}")
+    @commands.Cog.listener()
+    async def on_red_audio_track_end(self, guild_id: int, track, player):
+        if player is None:
+            state = self.session_state.get(guild_id)
+            if state and state.get("active"):
+                log.info(f"Queue ended for guild {guild_id}, triggering auto-extend")
+                state["active"] = False
+                await self._auto_extend(guild_id, state)
+                state["active"] = True
 
     async def _auto_extend(self, guild_id: int, state: dict):
         vibe = state.get("vibe", "")
