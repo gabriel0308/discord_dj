@@ -51,16 +51,17 @@ class VibeCog(commands.Cog):
                 continue
 
             try:
-                player = audio.lavalink.get_player(guild_id)
+                player = await audio.config.guild_from_id(guild_id).player()
                 if not player:
                     continue
 
-                queue_size = player.queue_size() if hasattr(player, "queue_size") else 0
-                is_playing = player.is_playing
+                queue = player.get("queue", []) or []
+                queue_len = len(queue) if isinstance(queue, list) else 0
+                is_playing = player.get("playing", False)
 
-                log.info(f"Guild {guild_id}: queue_size={queue_size}, playing={is_playing}, vibe={state['vibe']}")
+                log.info(f"Guild {guild_id}: queue_len={queue_len}, playing={is_playing}, vibe={state['vibe']}")
 
-                if queue_size <= 1 and not is_playing:
+                if queue_len <= 1 and not is_playing:
                     log.info(f"Auto-extending playlist for guild {guild_id}")
                     state["active"] = False
                     await self._auto_extend(guild_id, state)
