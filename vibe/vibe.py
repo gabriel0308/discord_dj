@@ -34,33 +34,35 @@ class VibeCog(commands.Cog):
         self.session_state.clear()
 
     @commands.Cog.listener()
-    async def on_red_audio_track_end(self, guild_id: int, track, player):
-        log.info(f"Track ended: guild={guild_id}, track={track}, player_type={type(player).__name__ if player else 'None'}")
+    async def on_red_audio_track_end(self, guild: discord.Guild, track, requester):
+        log.info(f"Track ended: guild={guild.id}, track={track.title if track else 'None'}, requester={requester}")
 
         try:
             audio_cog = self.bot.get_cog("Audio")
             if not audio_cog:
+                log.info("Audio cog not found")
                 return
 
-            p = getattr(audio_cog, "player_manager", None)
-            if not p:
+            player_manager = getattr(audio_cog, "player_manager", None)
+            if not player_manager:
                 log.info("No player_manager found")
                 return
 
-            player_obj = p.get(guild_id)
+            player_obj = player_manager.get(guild.id)
             if not player_obj:
-                log.info(f"No player for guild {guild_id}")
+                log.info(f"No player for guild {guild.id}")
                 return
 
-            queue_len = len(player_obj.queue) if getattr(player_obj, "queue", None) else 0
+            queue = getattr(player_obj, "queue", None)
+            queue_len = len(queue) if queue else 0
             log.info(f"Player queue length: {queue_len}")
 
             if queue_len <= 1:
-                state = self.session_state.get(guild_id)
+                state = self.session_state.get(guild.id)
                 if state and state.get("active"):
-                    log.info(f"Queue nearly empty, triggering auto-extend for guild {guild_id}")
+                    log.info(f"Queue nearly empty, triggering auto-extend for guild {guild.id}")
                     state["active"] = False
-                    await self._auto_extend(guild_id, state)
+                    await self._auto_extend(guild.id, state)
                     state["active"] = True
         except Exception as e:
             log.error(f"Error in on_red_audio_track_end: {e}")
