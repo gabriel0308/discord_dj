@@ -7,7 +7,6 @@ from typing import Optional
 import discord
 from redbot.core import commands, Config
 from redbot.core.bot import Red
-from redbot.core import audio
 from redbot.core.utils.chat_formatting import pagify, box
 
 log = logging.getLogger("red.vibe")
@@ -39,12 +38,21 @@ class VibeCog(commands.Cog):
         log.info(f"Track ended: guild={guild_id}, track={track}, player_type={type(player).__name__ if player else 'None'}")
 
         try:
-            p = audio.get_player(guild_id)
+            audio_cog = self.bot.get_cog("Audio")
+            if not audio_cog:
+                return
+
+            p = getattr(audio_cog, "player_manager", None)
             if not p:
+                log.info("No player_manager found")
+                return
+
+            player_obj = p.get(guild_id)
+            if not player_obj:
                 log.info(f"No player for guild {guild_id}")
                 return
 
-            queue_len = len(p.queue) if p.queue else 0
+            queue_len = len(player_obj.queue) if getattr(player_obj, "queue", None) else 0
             log.info(f"Player queue length: {queue_len}")
 
             if queue_len <= 1:
