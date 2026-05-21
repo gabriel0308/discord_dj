@@ -27,7 +27,7 @@ class VibeCog(commands.Cog):
         self.config.register_global(**default_global)
 
         self.session_state = {}
-        self._auto_extend_task = self._auto_extend_loop
+        self._auto_extend_task.start()
 
     async def red_delete_data_for_user(self, **kwargs):
         pass
@@ -35,14 +35,6 @@ class VibeCog(commands.Cog):
     async def cog_unload(self):
         self._auto_extend_task.cancel()
         self.session_state.clear()
-
-    @commands.Cog.listener()
-    async def on_red_audio_track_end(self, guild_id: int, track, player):
-        log.info(f"Track ended in guild {guild_id}, player={player}")
-
-    @commands.Cog.listener()
-    async def on_ready(self):
-        self._auto_extend_task.start()
 
     @tasks.loop(seconds=15)
     async def _auto_extend_task(self):
