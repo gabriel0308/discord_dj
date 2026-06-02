@@ -26,7 +26,7 @@ class VibeCog(commands.Cog):
             "llm_base_url": "https://opencode.ai/zen/v1",
             "llm_model": "gpt-5.1",
             "gemini_api_key": "",
-            "ttl_days": 7,
+            "ttl_minutes": 120,
         }
         self.config.register_global(**default_global)
 
@@ -80,14 +80,14 @@ class VibeCog(commands.Cog):
             conn.close()
         await self._run_db(_save)
 
-    async def get_played_songs(self, guild_id: int, limit: int = 100, ttl_days: int = 0) -> List[dict]:
+    async def get_played_songs(self, guild_id: int, limit: int = 100, ttl_minutes: int = 0) -> List[dict]:
         def _fetch():
             conn = sqlite3.connect(str(self._db_path))
             conn.row_factory = sqlite3.Row
-            if ttl_days > 0:
+            if ttl_minutes > 0:
                 cur = conn.execute(
                     "SELECT title, artist, year FROM played_songs WHERE guild_id = ? AND played_at >= datetime('now', ?) ORDER BY id DESC LIMIT ?",
-                    (guild_id, f"-{ttl_days} days", limit),
+                    (guild_id, f"-{ttl_minutes} minutes", limit),
                 )
             else:
                 cur = conn.execute(
@@ -99,11 +99,11 @@ class VibeCog(commands.Cog):
             return rows
         return await self._run_db(_fetch)
 
-    async def count_played_songs(self, guild_id: int, ttl_days: int = 0) -> int:
+    async def count_played_songs(self, guild_id: int, ttl_minutes: int = 0) -> int:
         def _count():
             conn = sqlite3.connect(str(self._db_path))
-            if ttl_days > 0:
-                cur = conn.execute("SELECT COUNT(*) FROM played_songs WHERE guild_id = ? AND played_at >= datetime('now', ?)", (guild_id, f"-{ttl_days} days"))
+            if ttl_minutes > 0:
+                cur = conn.execute("SELECT COUNT(*) FROM played_songs WHERE guild_id = ? AND played_at >= datetime('now', ?)", (guild_id, f"-{ttl_minutes} minutes"))
             else:
                 cur = conn.execute("SELECT COUNT(*) FROM played_songs WHERE guild_id = ?", (guild_id,))
             count = cur.fetchone()[0]
@@ -119,12 +119,12 @@ class VibeCog(commands.Cog):
             conn.close()
         await self._run_db(_clear)
 
-    async def prune_old_songs(self, guild_id: int, ttl_days: int):
+    async def prune_old_songs(self, guild_id: int, ttl_minutes: int):
         def _prune():
             conn = sqlite3.connect(str(self._db_path))
             cur = conn.execute(
                 "DELETE FROM played_songs WHERE guild_id = ? AND played_at < datetime('now', ?)",
-                (guild_id, f"-{ttl_days} days"),
+                (guild_id, f"-{ttl_minutes} minutes"),
             )
             deleted = cur.rowcount
             conn.commit()
@@ -164,8 +164,8 @@ class VibeCog(commands.Cog):
         log.info(f"Auto-extending playlist for guild {guild_id}, vibe: {vibe}")
         await channel.send(f"🔄 Queue ending! Generating 10 more songs for **{vibe}**...")
 
-        ttl = await self.config.ttl_days()
-        history = await self.get_played_songs(guild_id, limit=100, ttl_days=ttl)
+        ttl = await self.config.ttl_minutes()
+        history = await self.get_played_songs(guild_id, limit=100, ttl_minutes=ttl)
         all_played = history + played[-20:]
         seen_titles = set()
         unique_history = []
@@ -278,8 +278,8 @@ class VibeCog(commands.Cog):
 
         await ctx.send(f"🎵 Generating playlist for vibe: **{query}**...")
 
-        ttl = await self.config.ttl_days()
-        history = await self.get_played_songs(ctx.guild.id, limit=100, ttl_days=ttl)
+        ttl = await self.config.ttl_minutes()
+        history = await self.get_played_songs(ctx.guild.id, limit=100, ttl_minutes=ttl)
         songs = None
         try:
             songs = await self.generate_playlist(query, history)
@@ -343,7 +343,7 @@ class VibeCog(commands.Cog):
             "base_url": "llm_base_url",
             "model": "llm_model",
             "gemini_key": "gemini_api_key",
-            "ttl": "ttl_days",
+            "ttl": "ttl_minutes",
         }
         config_key = key_map.get(key.lower())
         if not config_key:
@@ -384,14 +384,14 @@ class VibeCog(commands.Cog):
         model = await self.config.llm_model()
         gemini_key = await self.config.gemini_api_key()
 
-        ttl = await self.config.ttl_days()
+        ttl = await self.config.ttl_minutes()
 
         msg = f"**LLM Config:**\n"
         msg += f"Zen API Key: `{'SET' if api_key else 'NOT SET'}`\n"
         msg += f"Zen Base URL: `{base_url}`\n"
         msg += f"Zen Model: `{model}`\n"
         msg += f"Gemini Key: `{'SET' if gemini_key else 'NOT SET'}`\n"
-        msg += f"History TTL: `{ttl}` days\n"
+        msg += f"History TTL: `{ttl}` min\n"
         msg += f"\n**Primary:** `{'Gemini' if gemini_key else 'Zen'}`"
 
         await ctx.send(msg)
@@ -410,13 +410,13 @@ class VibeCog(commands.Cog):
     async def vibe_status(self, ctx: commands.Context):
         """Show current vibe session status."""
         state = self.session_state.get(ctx.guild.id)
-        ttl = await self.config.ttl_days()
+        ttl = await self.config.ttl_minutes()
         total_db = await self.count_played_songs(ctx.guild.id)
-        total_ttl = await self.count_played_songs(ctx.guild.id, ttl_days=ttl)
+        total_ttl = await self.count_played_songs(ctx.guild.id, ttl_minutes=ttl)
 
         msg = f"**Vibe Session:**\n"
-        msg += f"History (total): `{total_db}` | Within TTL ({ttl}d): `{total_ttl}`\n"
-        msg += f"TTL: `{ttl}` days (.vibe set ttl <days>)\n"
+        msg += f"History (total): `{total_db}` | Within TTL ({ttl}min): `{total_ttl}`\n"
+        msg += f"TTL: `{ttl}` minutes (.vibe set ttl <minutes>)\n"
 
         if state:
             msg += f"Vibe: **{state['vibe']}**\n"
@@ -463,9 +463,9 @@ class VibeCog(commands.Cog):
     @commands.is_owner()
     async def vibe_history_prune(self, ctx: commands.Context):
         """Remove songs older than the current TTL from history (owner only)."""
-        ttl = await self.config.ttl_days()
+        ttl = await self.config.ttl_minutes()
         deleted = await self.prune_old_songs(ctx.guild.id, ttl)
-        await ctx.send(f"✅ Removed `{deleted}` song(s) older than {ttl} days from history.")
+        await ctx.send(f"✅ Removed `{deleted}` song(s) older than {ttl} minutes from history.")
 
     async def generate_playlist(self, vibe: str, history: list = None) -> list:
         gemini_key = await self.config.gemini_api_key()
