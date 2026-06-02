@@ -71,14 +71,25 @@ class VibeCog(commands.Cog):
     async def save_played_songs(self, guild_id: int, songs: List[dict]):
         def _save():
             conn = sqlite3.connect(str(self._db_path))
-            rows = [(guild_id, s["title"], s["artist"], s.get("year", "")) for s in songs]
-            conn.executemany(
-                "INSERT INTO played_songs (guild_id, title, artist, year) VALUES (?, ?, ?, ?)",
-                rows,
-            )
-            conn.commit()
+            existing = set()
+            cur = conn.execute("SELECT title, artist FROM played_songs WHERE guild_id = ?", (guild_id,))
+            for row in cur:
+                existing.add((row[0].lower(), row[1].lower()))
+            rows = []
+            for s in songs:
+                key = (s["title"].lower(), s["artist"].lower())
+                if key not in existing:
+                    existing.add(key)
+                    rows.append((guild_id, s["title"], s["artist"], s.get("year", "")))
+            if rows:
+                conn.executemany(
+                    "INSERT INTO played_songs (guild_id, title, artist, year) VALUES (?, ?, ?, ?)",
+                    rows,
+                )
+                conn.commit()
             conn.close()
-        await self._run_db(_save)
+            return len(rows)
+        return await self._run_db(_save)
 
     async def get_played_songs(self, guild_id: int, limit: int = 100, ttl_minutes: int = 0) -> List[dict]:
         def _fetch():
@@ -213,6 +224,24 @@ class VibeCog(commands.Cog):
                 await channel.send("⚠️ Could not generate more songs. Queue will end.")
                 return
 
+            # Force-filter AI output against all known played songs
+            played_lookup = set()
+            for s in all_played:
+                played_lookup.add((s["title"].lower(), s["artist"].lower()))
+            filtered = []
+            for s in songs:
+                key = (s["title"].lower(), s["artist"].lower())
+                if key not in played_lookup:
+                    played_lookup.add(key)
+                    filtered.append(s)
+            if filtered != songs:
+                log.info(f"Auto-extend: filtered out {len(songs) - len(filtered)} already-played song(s) from AI output")
+            songs = filtered
+
+            if not songs:
+                await channel.send("⚠️ All AI-generated songs were already played. Queue will end.")
+                return
+
             play_cmd = self.bot.get_command("play")
             if play_cmd is None:
                 return
@@ -295,6 +324,23 @@ class VibeCog(commands.Cog):
             await ctx.invoke(play_cmd, query=f"ytsearch:{query}")
             await ctx.send(f"✅ Searching directly for **{query}** on YouTube.")
             return
+
+        # Force-filter AI output against history (first song is exempt — user explicitly requested it)
+        if history:
+            played_lookup = set()
+            for s in history:
+                played_lookup.add((s["title"].lower(), s["artist"].lower()))
+            filtered = [songs[0]] if songs else []
+            for s in songs[1:]:
+                key = (s["title"].lower(), s["artist"].lower())
+                if key not in played_lookup:
+                    played_lookup.add(key)
+                    filtered.append(s)
+                else:
+                    log.info(f"vibe_play: skipping already-played song: {s['title']} - {s['artist']}")
+            if len(filtered) != len(songs):
+                log.info(f"vibe_play: filtered out {len(songs) - len(filtered)} already-played song(s)")
+            songs = filtered
 
         await ctx.send(f"📋 Found {len(songs)} songs. Adding to queue...")
 
